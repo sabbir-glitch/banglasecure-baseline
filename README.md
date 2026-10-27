@@ -8,8 +8,9 @@ small organisations in Bangladesh.
 
 ## Project status
 
-Early development. The dependency-audit command is implemented; the other
-capabilities listed below are planned and are not currently available.
+Early development. Dependency auditing and local secret scanning are
+implemented; the other capabilities listed below are planned and are not
+currently available.
 
 ## Implemented: dependency auditing
 
@@ -54,9 +55,57 @@ Only assess projects that you own or are explicitly authorised to assess.
 Because dependency resolution can execute project build tooling, only audit
 projects you trust sufficiently for that resolution process.
 
+## Implemented: secret scanning
+
+Gitleaks is a separate executable and is not installed by BanglaSecure. On
+Windows, download a supported Gitleaks 8.x release from the
+[official Gitleaks releases](https://github.com/gitleaks/gitleaks/releases),
+verify it using the release's published checksums, and add the directory
+containing `gitleaks.exe` to `PATH`. Confirm that `gitleaks version` works in
+the terminal used to run BanglaSecure. BanglaSecure requires Gitleaks 8.19.0
+or newer, before version 9, and reports a clear error if it is unavailable or
+unsupported; it never downloads or installs the scanner.
+
+Scan current files in an explicitly selected local directory:
+
+```powershell
+banglasecure secret-scan .\path\to\project
+```
+
+Add `--include-git-history` to also inspect Git history:
+
+```powershell
+banglasecure secret-scan .\path\to\repository --include-git-history
+```
+
+File scanning checks the current directory tree; it does not inspect old
+commits. Git-history scanning requires a Git repository and checks historical
+content as well. Scans have a five-minute timeout. Missing executables,
+unsupported scanner versions, malformed reports, timeouts, and scanner
+failures return a distinct non-zero status and are not reported as clean
+scans. Findings also return a non-zero status for CI.
+
+BanglaSecure asks Gitleaks to redact reports completely and writes the JSON
+report and an explicit default-rules configuration to a temporary directory
+outside the target. It captures scanner output, parses only safe metadata,
+never displays raw `Secret` or `Match` fields, and removes temporary files
+after success or failure. Repository-provided Gitleaks configuration is not
+used: the scanner is explicitly given its default rules so a repository
+configuration cannot silently disable checks. Source files, credentials,
+repository archives, and scan reports are not uploaded or saved as BanglaSecure
+reports. The scan does not modify the assessed repository.
+
+A finding indicates a possible secret, not that a credential is genuine or
+still valid. Verify it without copying or sharing the value. If it is a
+genuine exposed credential, revoke or rotate it; deleting the source line
+alone does not invalidate the credential or remove it from Git history.
+Only scan directories and repositories you own or are explicitly authorised
+to assess. Gitleaks applies detector-specific matching and entropy thresholds;
+low-entropy placeholders or synthetic strings may not match a default rule.
+A clean result is not proof that no secrets are present.
+
 ## Planned capabilities
 
-- Secret detection using Gitleaks.
 - Non-invasive HTTPS, TLS, HTTP security-header, and selected DNS checks.
 - JSON and SARIF reports.
 - GitHub Actions integration.
@@ -64,8 +113,7 @@ projects you trust sufficiently for that resolution process.
 ## Security and privacy
 
 The tool is intended for repositories and infrastructure that the operator
-owns or is explicitly authorised to assess. The dependency audit is the only
-implemented assessment command at this stage.
+owns or is explicitly authorised to assess.
 
 The design prioritises local processing, redacted findings, explicit scope,
 and reproducible checks.
@@ -74,7 +122,9 @@ Scan results and repository contents are not uploaded to a central BanglaSecure
 service. Dependency auditing is an exception to fully offline operation:
 after consent, pip-audit can send dependency names and versions to external
 advisory and package-index services as part of auditing and dependency
-resolution. BanglaSecure itself does not send source files, archives,
+resolution. Secret scanning is local; BanglaSecure captures Gitleaks output
+and temporarily writes a report outside the assessed directory, then deletes
+the temporary files. BanglaSecure does not send source files, archives,
 credentials, environment variables, or complete reports.
 
 BanglaSecure Baseline cannot prove that a system is secure and does not

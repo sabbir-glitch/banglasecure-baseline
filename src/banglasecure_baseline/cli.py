@@ -6,6 +6,7 @@ from importlib.metadata import version as package_version
 import typer
 
 from banglasecure_baseline.dependency_audit import DependencyAuditError, audit_dependencies
+from banglasecure_baseline.secret_scan import SecretScanError, scan_secrets
 
 app = typer.Typer(
     help="Affordable security checks. Clear fixes. Safer systems.",
@@ -62,6 +63,40 @@ def dependency_audit(
         typer.echo(f"  Evidence: {finding.safe_evidence}")
         if finding.references:
             typer.echo(f"  References: {', '.join(finding.references)}")
+    raise typer.Exit(code=1)
+
+
+@app.command("secret-scan")
+def secret_scan(
+    target: str = typer.Argument(
+        ...,
+        help=(
+            "Explicit local directory to scan; assess only directories you are authorised to scan."
+        ),
+    ),
+    include_git_history: bool = typer.Option(
+        False,
+        "--include-git-history",
+        help="Also scan the target Git repository's commit history.",
+    ),
+) -> None:
+    """Scan local files for potential secrets without displaying secret values."""
+    try:
+        findings = scan_secrets(target, include_git_history=include_git_history)
+    except SecretScanError as error:
+        typer.echo(f"Secret scan failed: {error}", err=True)
+        raise typer.Exit(code=2) from None
+
+    if not findings:
+        typer.echo("Secret scan completed: Gitleaks reported no potential secrets.")
+        return
+
+    typer.echo(f"Secret scan found {len(findings)} potential finding(s):")
+    for finding in findings:
+        typer.echo(f"- {finding.title}")
+        typer.echo(f"  Severity: {finding.severity.value}")
+        typer.echo(f"  Location: {finding.location}")
+        typer.echo(f"  Evidence: {finding.safe_evidence}")
     raise typer.Exit(code=1)
 
 
