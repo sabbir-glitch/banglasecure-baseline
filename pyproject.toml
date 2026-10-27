@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling>=1.26,<2.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "banglasecure-baseline"
+version = "0.1.0"
+description = "A practical cybersecurity assessment toolkit for small organisations."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "Sabbir Ahammed" }
+]
+keywords = [
+    "cybersecurity",
+    "security-baseline",
+    "devsecops",
+    "bangladesh",
+    "security-assessment"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security"
+]
+dependencies = [
+    "requests>=2.32,<3.0",
+    "typer>=0.12,<1.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2,<2.0",
+    "mypy>=1.11,<2.0",
+    "pytest>=8.0,<10.0",
+    "pytest-cov>=5.0,<7.0",
+    "ruff>=0.9,<1.0",
+    "types-requests>=2.32,<3.0"
+]
+security = [
+    "pip-audit>=2.7,<3.0"
+]
+
+[project.scripts]
+banglasecure = "banglasecure_baseline.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/banglasecure_baseline"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ANN"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+files = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers --strict-config --cov=banglasecure_baseline --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+source = ["banglasecure_baseline"]
+
+[tool.coverage.report]
+show_missing = true
