@@ -9,16 +9,16 @@ The installed console command is `banglasecure`.
 
 ## Project status
 
-Version 0.1.0 release candidate; not publicly released. Dependency auditing,
-local secret scanning, and authorised web configuration checks are
-implemented; the other capabilities listed below are planned and are not
-currently available.
+Project version 0.1.0. Dependency auditing, local secret scanning, and
+authorised web configuration checks are implemented; the other capabilities
+listed below are planned and are not currently available.
 
 ## Implemented: dependency auditing
 
 - Install the project and its optional scanner:
 
   ```powershell
+  # Run from the project checkout root.
   python -m pip install ".[security]"
   ```
 

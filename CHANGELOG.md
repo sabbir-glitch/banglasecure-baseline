@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (release candidate; not yet published)
+## 0.1.0
 
 ### Added
 
@@ -18,5 +18,6 @@
   distribution artifacts and smoke-testing the installed wheel and CLI in an
   isolated environment.
 
-This release candidate is not a comprehensive security assessment and does not
-prove that an application or system is secure.
+BanglaSecure Baseline is a limited security baseline, not a comprehensive
+security assessment, and does not prove that an application or system is
+secure.
