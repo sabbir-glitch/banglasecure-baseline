@@ -84,6 +84,49 @@ def test_dependency_audit_success_reports_clean_result(
     assert "no known vulnerabilities were reported" in result.output
 
 
+def test_dependency_audit_json_stdout_has_only_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "audit_dependencies", lambda *args, **kwargs: ())
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "dependency-audit",
+            str(project),
+            "--allow-advisory-network",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["findings"] == []
+    assert "completed" not in result.stdout.lower()
+
+
+def test_dependency_audit_json_still_requires_network_consent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    audit = Mock(side_effect=cli.DependencyAuditError("Consent required."))
+    monkeypatch.setattr(cli, "audit_dependencies", audit)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["dependency-audit", str(project), "--format", "json"],
+    )
+
+    assert result.exit_code == 2
+    audit.assert_called_once_with(str(project), allow_advisory_network=False)
+    assert "Consent required" in result.output
+
+
 def test_dependency_audit_findings_return_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     finding = Finding(
         finding_id="DEP-0123456789abcdef",
@@ -126,6 +169,31 @@ def test_dependency_audit_failure_does_not_claim_clean_result(
     assert result.exit_code == 2
     assert "Dependency audit failed" in result.output
     assert "no known vulnerabilities" not in result.output
+
+
+def test_dependency_audit_json_scanner_failure_is_not_a_clean_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    audit = Mock(side_effect=ScannerExecutionError("pip-audit could not be started."))
+    monkeypatch.setattr(cli, "audit_dependencies", audit)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "dependency-audit",
+            str(project),
+            "--allow-advisory-network",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Dependency audit failed" in result.output
+    assert not result.stdout.startswith("{")
 
 
 def test_secret_scan_help_explains_history_option() -> None:
@@ -172,6 +240,78 @@ def test_secret_scan_findings_return_nonzero_without_secret_values(
     _assert_secret_not_disclosed(result.output, sentinel)
 
 
+def test_secret_scan_json_report_omits_raw_synthetic_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sentinel = _synthetic_github_token()
+    finding = Finding(
+        finding_id="SECRET-0123456789abcdef0123",
+        title="Potential secret detected (synthetic-rule)",
+        severity=Severity.UNASSESSED,
+        category="secret",
+        summary_en="Potential secret detected; value withheld.",
+        summary_bn="সম্ভাব্য গোপন তথ্য শনাক্ত; মান প্রকাশ করা হয়নি।",
+        safe_evidence="Potential secret detected; value withheld.",
+        impact_en="A genuine credential may allow unauthorised access.",
+        impact_bn="প্রকৃত পরিচয়-তথ্য অননুমোদিত প্রবেশের সুযোগ দিতে পারে।",
+        remediation_en="Revoke or rotate any genuine exposed credential.",
+        remediation_bn="প্রকৃত উন্মুক্ত পরিচয়-তথ্য বাতিল বা পরিবর্তন করুন।",
+        location="app.py:3",
+    )
+    monkeypatch.setattr(cli, "scan_secrets", lambda *args, **kwargs: (finding,))
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", str(project), "--format", "json"],
+    )
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["findings"][0]["finding_id"] == finding.finding_id
+    _assert_secret_not_disclosed(result.stdout, sentinel)
+
+
+def test_secret_scan_json_file_output_is_separate_from_completion_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "scan_secrets", lambda *args, **kwargs: ())
+    project = tmp_path / "project"
+    project.mkdir()
+    output = tmp_path / "report.json"
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", str(project), "--format", "json", "--output", str(output)],
+    )
+
+    assert result.exit_code == 0
+    assert "JSON report written to" in result.stdout
+    assert json.loads(output.read_text(encoding="utf-8"))["findings"] == []
+
+
+def test_text_format_rejects_output_file_before_running_scanner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scan = Mock()
+    monkeypatch.setattr(cli, "scan_secrets", scan)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", str(project), "--output", str(tmp_path / "report.json")],
+    )
+
+    assert result.exit_code == 2
+    scan.assert_not_called()
+    assert "only with --format json" in result.output
+
+
 def test_secret_scan_failure_is_distinct_from_findings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -184,6 +324,25 @@ def test_secret_scan_failure_is_distinct_from_findings(
     assert result.exit_code == 2
     assert "Secret scan failed" in result.output
     assert "Install it separately" in result.output
+
+
+def test_secret_scan_json_scanner_failure_is_not_a_clean_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scan = Mock(side_effect=ScannerUnavailableError("Gitleaks unavailable."))
+    monkeypatch.setattr(cli, "scan_secrets", scan)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", str(project), "--format", "json"],
+    )
+
+    assert result.exit_code == 2
+    assert "Secret scan failed" in result.output
+    assert not result.stdout.startswith("{")
 
 
 def test_secret_scan_cli_never_displays_raw_report_fields(
@@ -326,6 +485,99 @@ def test_web_check_exit_code_for_completed_assessment(
 
     assert result.exit_code == expected_code
     assert message in result.output
+
+
+def test_web_check_json_report_uses_mocked_verified_scan_and_preserves_finding_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finding = Finding(
+        finding_id="WEB-0123456789abcdef",
+        title="SPF record is absent",
+        severity=Severity.UNASSESSED,
+        category="web-configuration",
+        summary_en="No SPF record was found.",
+        summary_bn="SPF রেকর্ড পাওয়া যায়নি।",
+        safe_evidence="No SPF TXT record was found.",
+        impact_en="Mail spoofing may be harder to identify.",
+        impact_bn="জাল ইমেইল শনাক্ত করা কঠিন হতে পারে।",
+        remediation_en="Publish an SPF policy.",
+        remediation_bn="SPF নীতি প্রকাশ করুন।",
+        location="dns://example.org/TXT",
+    )
+    check = Mock(return_value=(finding,))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--allow-network",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["findings"][0]["title"] == finding.title
+    check.assert_called_once_with(
+        "example.org",
+        verification_token="z" * 43,
+        allow_network=True,
+    )
+
+
+def test_web_check_json_does_not_bypass_network_consent_or_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = Mock(side_effect=NetworkConsentError("Explicit network consent is required."))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    check.assert_called_once_with(
+        "example.org",
+        verification_token="z" * 43,
+        allow_network=False,
+    )
+    assert not result.stdout.startswith("{")
+
+
+def test_web_check_json_scanner_failure_is_not_a_clean_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = Mock(side_effect=VerificationError("The DNS verification token does not match."))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--allow-network",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Web assessment failed" in result.output
+    assert not result.stdout.startswith("{")
 
 
 def test_web_check_verification_failure_returns_distinct_error(

@@ -92,8 +92,9 @@ never displays raw `Secret` or `Match` fields, and removes temporary files
 after success or failure. Repository-provided Gitleaks configuration is not
 used: the scanner is explicitly given its default rules so a repository
 configuration cannot silently disable checks. Source files, credentials,
-repository archives, and scan reports are not uploaded or saved as BanglaSecure
-reports. The scan does not modify the assessed repository.
+repository archives, and scan reports are not uploaded. JSON reports are only
+created when explicitly requested with `--format json`; see the reporting
+section below. The scan does not modify the assessed repository.
 
 A finding indicates a possible secret, not that a credential is genuine or
 still valid. Verify it without copying or sharing the value. If it is a
@@ -156,9 +157,55 @@ metadata is reported only when normal TLS certificate validation succeeds;
 on validation failure, the scanner reports the failure without trusting or
 retrieving unverified certificate metadata.
 
+## Implemented: JSON reporting
+
+All three scan commands retain human-readable text output by default. Select
+`--format json` to write a UTF-8 JSON report to stdout:
+
+```powershell
+banglasecure dependency-audit . --allow-advisory-network --format json
+banglasecure secret-scan .\path\to\project --format json
+banglasecure web-check example.org --verification-token "<token>" --allow-network --format json
+```
+
+Use `--output PATH` with JSON format to atomically write a local report file.
+The parent directory must already exist; the destination must be a regular
+file, network share, symbolic link, or a path through a symbolic link or
+Windows junction. Existing regular files at the destination are replaced
+atomically. BanglaSecure does not claim restrictive Windows file permissions;
+protect report files according to your operating-system policy.
+
+```powershell
+banglasecure dependency-audit . --allow-advisory-network --format json --output .\audit.json
+banglasecure secret-scan .\path\to\project --format json --output .\secrets.json
+banglasecure web-check example.org --verification-token "<token>" --allow-network --format json --output .\web.json
+```
+
+The JSON document uses schema version `1.0`, format identifier
+`banglasecure-json`, and the tool name `BanglaSecure Baseline`. Its top-level
+fields are `schema_version`, `tool`, `format`, and `findings`. Each finding
+preserves the shared model fields: ID, title, severity, category, English and
+Bangla summaries, safe evidence, English and Bangla impact and remediation,
+references, and location. Field order is stable, and Bangla text is emitted
+as UTF-8 without ASCII escaping. This versioned schema may evolve in a future
+version.
+
+JSON on stdout contains only the report document. File output prints a short
+completion message separately. Exit status is `0` when the assessment
+completed without findings, `1` when findings were reported, and `2` when
+the assessment or report generation failed. JSON output does not bypass
+`--allow-advisory-network`, DNS verification, or `--allow-network`.
+
+Reports are local and are not uploaded by BanglaSecure. They can contain
+dependency names and versions, secret finding locations, domain names, and
+other sensitive infrastructure information. Review and protect them; do not
+commit them to public repositories without reviewing their contents. Report
+output must be outside an assessed scan directory and cannot overwrite the
+selected manifest. Reports are never created during normal text-mode scans.
+
 ## Planned capabilities
 
-- JSON and SARIF reports.
+- SARIF reports.
 - GitHub Actions integration.
 
 ## Security and privacy

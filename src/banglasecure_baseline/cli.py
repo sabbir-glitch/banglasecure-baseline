@@ -2,10 +2,18 @@
 
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
+from pathlib import Path
 
 import typer
 
 from banglasecure_baseline.dependency_audit import DependencyAuditError, audit_dependencies
+from banglasecure_baseline.findings import Finding
+from banglasecure_baseline.reporting import (
+    ReportError,
+    serialize_json_report,
+    validate_report_destination,
+    write_json_report,
+)
 from banglasecure_baseline.secret_scan import SecretScanError, scan_secrets
 from banglasecure_baseline.web_check import (
     WebCheckError,
@@ -17,6 +25,32 @@ app = typer.Typer(
     help="Affordable security checks. Clear fixes. Safer systems.",
     no_args_is_help=True,
 )
+
+
+def _prepare_report_output(
+    report_format: str,
+    output: str | None,
+    protected_target: str | None,
+) -> tuple[str, Path | None]:
+    if report_format not in {"text", "json"}:
+        raise ReportError("Report format must be either 'text' or 'json'.")
+    if output is None:
+        return report_format, None
+    if report_format != "json":
+        raise ReportError("--output can be used only with --format json.")
+    return report_format, validate_report_destination(output, protected_target=protected_target)
+
+
+def _emit_json_report(
+    findings: tuple[Finding, ...],
+    output: Path | None,
+    protected_target: str | None,
+) -> None:
+    if output is None:
+        typer.echo(serialize_json_report(findings), nl=False)
+        return
+    report_path = write_json_report(findings, output, protected_target=protected_target)
+    typer.echo(f"JSON report written to {report_path}.")
 
 
 @app.callback()
@@ -45,17 +79,42 @@ def dependency_audit(
         False,
         "--allow-advisory-network",
         help=(
-            "Consent to external vulnerability-advisory and package-index queries. "
-            "Package names and versions may be sent to those services."
+            "Package names and versions may be sent to external advisory and package-index "
+            "services; explicit consent is required."
         ),
+    ),
+    report_format: str = typer.Option(
+        "text",
+        "--format",
+        help="Output format: text (default) or json.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        help="Write a JSON report to this local file; requires --format json.",
     ),
 ) -> None:
     """Audit dependencies; this check does not prove that an application is secure."""
+    try:
+        report_format, output_path = _prepare_report_output(report_format, output, target)
+    except ReportError as error:
+        typer.echo(f"Dependency audit failed: {error}", err=True)
+        raise typer.Exit(code=2) from None
     try:
         findings = audit_dependencies(target, allow_advisory_network=allow_advisory_network)
     except DependencyAuditError as error:
         typer.echo(f"Dependency audit failed: {error}", err=True)
         raise typer.Exit(code=2) from None
+
+    if report_format == "json":
+        try:
+            _emit_json_report(findings, output_path, target)
+        except ReportError as error:
+            typer.echo(f"Dependency audit report failed: {error}", err=True)
+            raise typer.Exit(code=2) from None
+        if findings:
+            raise typer.Exit(code=1)
+        return
 
     if not findings:
         typer.echo("Dependency audit completed: no known vulnerabilities were reported.")
@@ -84,13 +143,38 @@ def secret_scan(
         "--include-git-history",
         help="Also scan the target Git repository's commit history.",
     ),
+    report_format: str = typer.Option(
+        "text",
+        "--format",
+        help="Output format: text (default) or json.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        help="Write a JSON report to this local file; requires --format json.",
+    ),
 ) -> None:
     """Scan local files for potential secrets without displaying secret values."""
+    try:
+        report_format, output_path = _prepare_report_output(report_format, output, target)
+    except ReportError as error:
+        typer.echo(f"Secret scan failed: {error}", err=True)
+        raise typer.Exit(code=2) from None
     try:
         findings = scan_secrets(target, include_git_history=include_git_history)
     except SecretScanError as error:
         typer.echo(f"Secret scan failed: {error}", err=True)
         raise typer.Exit(code=2) from None
+
+    if report_format == "json":
+        try:
+            _emit_json_report(findings, output_path, target)
+        except ReportError as error:
+            typer.echo(f"Secret scan report failed: {error}", err=True)
+            raise typer.Exit(code=2) from None
+        if findings:
+            raise typer.Exit(code=1)
+        return
 
     if not findings:
         typer.echo("Secret scan completed: Gitleaks reported no potential secrets.")
@@ -137,8 +221,23 @@ def web_check(
         "--allow-network",
         help="Consent to DNS and HTTPS requests to the verified target domain.",
     ),
+    report_format: str = typer.Option(
+        "text",
+        "--format",
+        help="Output format: text (default) or json.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        help="Write a JSON report to this local file; requires --format json.",
+    ),
 ) -> None:
     """Check selected DNS and HTTPS configuration for a verified public domain."""
+    try:
+        report_format, output_path = _prepare_report_output(report_format, output, None)
+    except ReportError as error:
+        typer.echo(f"Web assessment failed: {error}", err=True)
+        raise typer.Exit(code=2) from None
     try:
         findings = check_web_configuration(
             domain,
@@ -148,6 +247,16 @@ def web_check(
     except WebCheckError as error:
         typer.echo(f"Web assessment failed: {error}", err=True)
         raise typer.Exit(code=2) from None
+
+    if report_format == "json":
+        try:
+            _emit_json_report(findings, output_path, None)
+        except ReportError as error:
+            typer.echo(f"Web assessment report failed: {error}", err=True)
+            raise typer.Exit(code=2) from None
+        if findings:
+            raise typer.Exit(code=1)
+        return
 
     if not findings:
         typer.echo("Web configuration checks completed without reportable findings.")
