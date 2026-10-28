@@ -93,8 +93,10 @@ after success or failure. Repository-provided Gitleaks configuration is not
 used: the scanner is explicitly given its default rules so a repository
 configuration cannot silently disable checks. Source files, credentials,
 repository archives, and scan reports are not uploaded. JSON reports are only
-created when explicitly requested with `--format json`; see the reporting
-section below. The scan does not modify the assessed repository.
+persisted as user-facing output when explicitly requested with `--format json`;
+Gitleaks still creates a temporary internal JSON report during scanning, which
+is removed after success or failure. See the reporting section below. The scan
+does not modify the assessed repository.
 
 A finding indicates a possible secret, not that a credential is genuine or
 still valid. Verify it without copying or sharing the value. If it is a
@@ -216,7 +218,9 @@ dependency names and versions, secret finding locations, domain names, and
 other sensitive infrastructure information. Review and protect them; do not
 commit them to public repositories without reviewing their contents. Report
 output must be outside an assessed scan directory and cannot overwrite the
-selected manifest. Reports are never created during normal text-mode scans.
+selected manifest. Text mode does not create persistent, user-facing report
+files. Secret scanning does create a temporary internal Gitleaks report during
+execution and removes it afterward.
 
 ## Implemented: GitHub Actions quality workflow
 

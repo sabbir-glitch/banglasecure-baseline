@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from banglasecure_baseline import reporting
 from banglasecure_baseline.findings import Finding, Severity
 from banglasecure_baseline.reporting import (
     REPORT_FORMAT,
@@ -174,6 +175,50 @@ def test_failed_atomic_replace_cleans_temporary_file_and_preserves_destination(
 
     assert destination.read_text(encoding="utf-8") == "existing"
     assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_mapped_windows_network_drive_is_rejected_without_accessing_the_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    drive_type = Mock(return_value=4)
+    monkeypatch.setattr("banglasecure_baseline.reporting._is_windows", lambda: True)
+    monkeypatch.setattr("banglasecure_baseline.reporting._windows_drive_type", drive_type)
+
+    with pytest.raises(ReportError, match="local path, not a network drive"):
+        validate_report_destination(r"R:\reports\report.json")
+
+    drive_type.assert_called_once_with("R:\\")
+
+
+@pytest.mark.parametrize("drive_type", [2, 3, 5, 6])
+def test_local_windows_drive_types_are_not_classified_as_network_drives(
+    monkeypatch: pytest.MonkeyPatch,
+    drive_type: int,
+) -> None:
+    get_drive_type = Mock(return_value=drive_type)
+    monkeypatch.setattr("banglasecure_baseline.reporting._is_windows", lambda: True)
+    monkeypatch.setattr(
+        "banglasecure_baseline.reporting._windows_drive_type",
+        get_drive_type,
+    )
+
+    assert not reporting._is_mapped_network_drive("C:")
+    get_drive_type.assert_called_once_with("C:\\")
+
+
+@pytest.mark.parametrize("drive_type", [0, 1])
+def test_unknown_windows_drive_type_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    drive_type: int,
+) -> None:
+    monkeypatch.setattr("banglasecure_baseline.reporting._is_windows", lambda: True)
+    monkeypatch.setattr(
+        "banglasecure_baseline.reporting._windows_drive_type",
+        Mock(return_value=drive_type),
+    )
+
+    with pytest.raises(ReportError, match="drive could not be verified"):
+        validate_report_destination(r"R:\reports\report.json")
 
 
 @pytest.mark.parametrize(

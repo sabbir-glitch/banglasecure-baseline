@@ -1,5 +1,6 @@
 """Deterministic JSON reporting for BanglaSecure Baseline findings."""
 
+import ctypes
 import json
 import os
 import re
@@ -17,10 +18,37 @@ REPORT_FORMAT = "banglasecure-json"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 SARIF_VERSION = "2.1.0"
 _LINE_SUFFIX = re.compile(r"^(.*):([1-9][0-9]*)$")
+_DRIVE_UNKNOWN = 0
+_DRIVE_NO_ROOT_DIR = 1
+_DRIVE_REMOTE = 4
 
 
 class ReportError(Exception):
     """A JSON report could not be validated or written safely."""
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _windows_drive_type(drive_root: str) -> int:
+    try:
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        get_drive_type.argtypes = [ctypes.c_wchar_p]
+        get_drive_type.restype = ctypes.c_uint
+        return int(get_drive_type(drive_root))
+    except (AttributeError, OSError):
+        raise ReportError("The report destination drive could not be verified.") from None
+
+
+def _is_mapped_network_drive(drive: str) -> bool:
+    if not _is_windows():
+        return False
+
+    drive_type = _windows_drive_type(f"{drive}\\")
+    if drive_type in {_DRIVE_UNKNOWN, _DRIVE_NO_ROOT_DIR}:
+        raise ReportError("The report destination drive could not be verified.")
+    return drive_type == _DRIVE_REMOTE
 
 
 def serialize_json_report(findings: Iterable[Finding]) -> str:
@@ -261,6 +289,8 @@ def validate_report_destination(
         windows_path = PureWindowsPath(str(destination))
         if windows_path.drive.startswith("\\\\"):
             raise ReportError("The report destination must be a local path, not a network share.")
+        if windows_path.drive and _is_mapped_network_drive(windows_path.drive):
+            raise ReportError("The report destination must be a local path, not a network drive.")
         path = Path(destination).expanduser()
         if not path.is_absolute():
             path = Path.cwd() / path
