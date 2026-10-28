@@ -5,6 +5,7 @@
 BanglaSecure Baseline is an open-source cybersecurity assessment toolkit
 designed to make selected defensive security checks more accessible to
 small organisations in Bangladesh.
+The installed console command is `banglasecure`.
 
 ## Project status
 
@@ -227,10 +228,12 @@ execution and removes it afterward.
 The `.github/workflows/ci.yml` workflow runs on pushes and pull requests using
 GitHub-hosted Linux runners and Python 3.12 and 3.13. It installs the project
 and development dependencies, then runs Ruff linting, Ruff formatting checks,
-pytest, mypy, and a package build. It uses read-only repository permissions,
-does not persist checkout credentials, and does not run remote security
-assessments, dependency advisory scans, or Gitleaks. The workflow does not
-upload SARIF or create GitHub Code Scanning alerts.
+pytest, and mypy. It builds both distribution formats, installs the wheel in a
+fresh temporary virtual environment, and smoke-tests the installed
+`banglasecure` command outside the source checkout. It uses read-only
+repository permissions, does not persist checkout credentials, and does not
+run remote security assessments, dependency advisory scans, or Gitleaks. The
+workflow does not upload SARIF or create GitHub Code Scanning alerts.
 
 ## Planned capabilities
 

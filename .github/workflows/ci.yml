@@ -41,5 +41,38 @@ jobs:
       - name: Check types
         run: python -m mypy
 
-      - name: Build package
-        run: python -m build
+      - name: Build and smoke-test installed wheel
+        shell: bash
+        run: |
+          dist_dir="${RUNNER_TEMP}/banglasecure-dist"
+          smoke_venv="${RUNNER_TEMP}/banglasecure-wheel-venv"
+          python -m build --outdir "$dist_dir"
+
+          wheel="$(find "$dist_dir" -maxdepth 1 -name '*.whl' -print -quit)"
+          sdist="$(find "$dist_dir" -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "$wheel"
+          test -n "$sdist"
+
+          python -m venv "$smoke_venv"
+          "$smoke_venv/bin/python" -m pip install "$wheel"
+
+          cd "$RUNNER_TEMP"
+          "$smoke_venv/bin/python" -I -c '
+          import sys
+          from pathlib import Path
+
+          import banglasecure_baseline
+
+          package_path = Path(banglasecure_baseline.__file__).resolve()
+          venv_path = Path(sys.prefix).resolve()
+          workspace_path = Path(sys.argv[1]).resolve()
+          assert package_path.is_relative_to(venv_path), package_path
+          assert not package_path.is_relative_to(workspace_path), package_path
+          ' "$GITHUB_WORKSPACE"
+
+          cli="$smoke_venv/bin/banglasecure"
+          "$cli" --help
+          "$cli" dependency-audit --help
+          "$cli" secret-scan --help
+          "$cli" web-check --help
+          "$cli" version
