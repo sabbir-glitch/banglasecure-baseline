@@ -4,7 +4,12 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from banglasecure_baseline.findings import Finding, Severity
+from banglasecure_baseline.findings import (
+    Finding,
+    InvalidFindingSeverityError,
+    Severity,
+    findings_fail_severity_gate,
+)
 
 
 def sample_finding() -> Finding:
@@ -55,3 +60,52 @@ def test_finding_is_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         finding.title = "Changed title"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("severity", "minimum_severity", "expected"),
+    [
+        (Severity.CRITICAL, Severity.HIGH, True),
+        (Severity.HIGH, Severity.HIGH, True),
+        (Severity.MEDIUM, Severity.HIGH, False),
+        (Severity.LOW, Severity.MEDIUM, False),
+        (Severity.INFO, Severity.INFO, True),
+        (Severity.UNASSESSED, Severity.CRITICAL, True),
+    ],
+)
+def test_severity_gate_uses_explicit_order_and_fails_closed_for_unassessed(
+    severity: Severity,
+    minimum_severity: Severity,
+    expected: bool,
+) -> None:
+    finding = replace(sample_finding(), severity=severity)
+
+    assert findings_fail_severity_gate((finding,), minimum_severity) is expected
+
+
+def test_severity_gate_preserves_fail_on_any_finding_by_default() -> None:
+    assert findings_fail_severity_gate((), None) is False
+    assert findings_fail_severity_gate((sample_finding(),), None) is True
+
+
+def test_severity_gate_handles_multiple_findings() -> None:
+    findings = (
+        replace(sample_finding(), severity=Severity.INFO),
+        replace(sample_finding(), finding_id="DEPENDENCY-002", severity=Severity.HIGH),
+    )
+
+    assert findings_fail_severity_gate(findings, Severity.MEDIUM) is True
+
+
+@pytest.mark.parametrize("severity", [None, "high", object()])
+def test_severity_gate_rejects_missing_or_unsupported_severity(severity: object) -> None:
+    finding = sample_finding()
+    object.__setattr__(finding, "severity", severity)
+
+    with pytest.raises(InvalidFindingSeverityError, match="missing or unsupported"):
+        findings_fail_severity_gate((finding,), Severity.HIGH)
+
+
+def test_severity_gate_rejects_unsupported_threshold() -> None:
+    with pytest.raises(InvalidFindingSeverityError, match="minimum severity"):
+        findings_fail_severity_gate((sample_finding(),), "high")  # type: ignore[arg-type]

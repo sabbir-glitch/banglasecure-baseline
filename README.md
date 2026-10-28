@@ -109,6 +109,29 @@ to assess. Gitleaks applies detector-specific matching and entropy thresholds;
 low-entropy placeholders or synthetic strings may not match a default rule.
 A clean result is not proof that no secrets are present.
 
+## Severity-based CI policy
+
+The `dependency-audit`, `secret-scan`, and `web-check` commands accept
+`--minimum-severity critical|high|medium|low|info|unassessed`. When selected,
+the command exits with status `1` if any finding meets or exceeds the chosen
+minimum. Findings below the threshold remain in the output and any requested
+JSON or SARIF report is still generated. Unassessed findings always fail an
+explicit threshold because their severity cannot safely be assumed to be
+below it. Without this option, existing behavior is preserved: any finding
+causes status `1`.
+
+For example, fail a secret-scan job on high-or-more-severe findings while
+retaining a SARIF report for investigation:
+
+```powershell
+banglasecure secret-scan .\path\to\project --minimum-severity high --format sarif --output .\secrets.sarif
+```
+
+Status `2` continues to indicate scanner, assessment, or report-generation
+failure; it is distinct from a severity-policy failure (status `1`). Invalid
+threshold values are rejected as command-line usage errors before a scan
+starts. The gate does not assign severity where the finding has none.
+
 ## Implemented: authorised web configuration checks
 
 Only assess public domains for which you have explicit legal authorisation.
@@ -211,8 +234,10 @@ version.
 
 JSON on stdout contains only the report document. File output prints a short
 completion message separately. Exit status is `0` when the assessment
-completed without findings, `1` when findings were reported, and `2` when
-the assessment or report generation failed. JSON output does not bypass
+completed without findings (or when all findings are below an explicitly
+selected minimum severity), `1` when findings are reportable under the
+selected severity policy, and `2` when the assessment or report generation
+failed. JSON output does not bypass
 `--allow-advisory-network`, DNS verification, or `--allow-network`.
 
 Reports are local and are not uploaded by BanglaSecure. They can contain

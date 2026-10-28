@@ -75,4 +75,8 @@ jobs:
           "$cli" dependency-audit --help
           "$cli" secret-scan --help
           "$cli" web-check --help
+          for scan_command in dependency-audit secret-scan web-check; do
+            command_help="$("$cli" "$scan_command" --help)"
+            [[ "$command_help" == *"--minimum-severity"* ]]
+          done
           "$cli" version

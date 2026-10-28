@@ -45,6 +45,52 @@ def _synthetic_github_token() -> str:
     return "ghp_" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(36))
 
 
+def _policy_finding(severity: Severity, finding_id: str = "POLICY-001") -> Finding:
+    return Finding(
+        finding_id=finding_id,
+        title=f"Synthetic {severity.value} finding",
+        severity=severity,
+        category="synthetic",
+        summary_en="Synthetic finding for severity-policy testing.",
+        summary_bn="সিভিয়ারিটি নীতির পরীক্ষার জন্য কৃত্রিম ফলাফল।",
+        safe_evidence="Synthetic evidence only.",
+        impact_en="Synthetic impact.",
+        impact_bn="কৃত্রিম প্রভাব।",
+        remediation_en="Review the synthetic finding.",
+        remediation_bn="কৃত্রিম ফলাফলটি পর্যালোচনা করুন।",
+        location="synthetic.txt:1",
+    )
+
+
+def _scan_args(scan_name: str) -> list[str]:
+    if scan_name == "dependency-audit":
+        return ["dependency-audit", ".", "--allow-advisory-network"]
+    if scan_name == "secret-scan":
+        return ["secret-scan", "."]
+    return [
+        "web-check",
+        "example.org",
+        "--verification-token",
+        "synthetic-token",
+        "--allow-network",
+    ]
+
+
+def _mock_scan_result(
+    monkeypatch: pytest.MonkeyPatch,
+    scan_name: str,
+    result: object,
+) -> Mock:
+    scan = Mock(return_value=result)
+    if scan_name == "dependency-audit":
+        monkeypatch.setattr(cli, "audit_dependencies", scan)
+    elif scan_name == "secret-scan":
+        monkeypatch.setattr(cli, "scan_secrets", scan)
+    else:
+        monkeypatch.setattr(cli, "check_web_configuration", scan)
+    return scan
+
+
 def test_help_displays_project_description() -> None:
     """The CLI help page should explain the tool's purpose."""
     result = runner.invoke(app, ["--help"])
@@ -73,6 +119,14 @@ def test_dependency_audit_help_explains_network_consent() -> None:
     assert result.exit_code == 0
     assert "--allow-advisory-network" in output
     assert "Package names and versions" in output
+
+
+@pytest.mark.parametrize("scan_name", ["dependency-audit", "secret-scan", "web-check"])
+def test_scan_help_exposes_minimum_severity_option(scan_name: str) -> None:
+    result = runner.invoke(app, [scan_name, "--help"], color=False, terminal_width=120)
+
+    assert result.exit_code == 0
+    assert "--minimum-severity" in _normalized_cli_output(result.output)
 
 
 def test_dependency_audit_requires_network_consent(tmp_path: Path) -> None:
@@ -245,6 +299,181 @@ def test_secret_scan_help_explains_history_option() -> None:
     assert result.exit_code == 0
     assert "--include-git-history" in output
     assert "authorised" in output
+
+
+@pytest.mark.parametrize("scan_name", ["dependency-audit", "secret-scan", "web-check"])
+@pytest.mark.parametrize(
+    ("severity", "minimum_severity", "expected_exit"),
+    [
+        (Severity.LOW, Severity.HIGH, 0),
+        (Severity.HIGH, Severity.HIGH, 1),
+        (Severity.CRITICAL, Severity.HIGH, 1),
+    ],
+)
+def test_minimum_severity_gate_across_scan_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    scan_name: str,
+    severity: Severity,
+    minimum_severity: Severity,
+    expected_exit: int,
+) -> None:
+    finding = _policy_finding(severity)
+    _mock_scan_result(monkeypatch, scan_name, (finding,))
+
+    result = runner.invoke(
+        app,
+        [*_scan_args(scan_name), "--minimum-severity", minimum_severity.value],
+    )
+
+    assert result.exit_code == expected_exit
+    assert finding.title in result.output
+    if expected_exit:
+        assert "Severity policy failed" in result.output
+    else:
+        assert "Severity policy failed" not in result.output
+
+
+@pytest.mark.parametrize("scan_name", ["dependency-audit", "secret-scan", "web-check"])
+def test_minimum_severity_gate_allows_no_findings(
+    monkeypatch: pytest.MonkeyPatch,
+    scan_name: str,
+) -> None:
+    _mock_scan_result(monkeypatch, scan_name, ())
+
+    result = runner.invoke(
+        app,
+        [*_scan_args(scan_name), "--minimum-severity", "critical"],
+    )
+
+    assert result.exit_code == 0
+    assert "Severity policy failed" not in result.output
+
+
+def test_unassessed_finding_fails_any_explicit_minimum_severity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finding = _policy_finding(Severity.UNASSESSED)
+    _mock_scan_result(monkeypatch, "secret-scan", (finding,))
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", ".", "--minimum-severity", "critical"],
+    )
+
+    assert result.exit_code == 1
+    assert finding.title in result.output
+    assert "or are unassessed" in result.output
+
+
+def test_invalid_finding_severity_is_an_assessment_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finding = _policy_finding(Severity.HIGH)
+    object.__setattr__(finding, "severity", None)
+    _mock_scan_result(monkeypatch, "secret-scan", (finding,))
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", ".", "--minimum-severity", "high"],
+    )
+
+    assert result.exit_code == 2
+    assert "missing or unsupported severity" in result.output
+    assert "Severity policy failed" not in result.output
+
+
+@pytest.mark.parametrize("report_format", ["json", "sarif"])
+@pytest.mark.parametrize("write_to_file", [False, True])
+def test_threshold_failure_still_generates_requested_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    report_format: str,
+    write_to_file: bool,
+) -> None:
+    finding = _policy_finding(Severity.HIGH)
+    _mock_scan_result(monkeypatch, "secret-scan", (finding,))
+    project = tmp_path / "project"
+    project.mkdir()
+    args = [
+        "secret-scan",
+        str(project),
+        "--minimum-severity",
+        "high",
+        "--format",
+        report_format,
+    ]
+    output_path = tmp_path / ("report." + ("sarif" if report_format == "sarif" else "json"))
+    if write_to_file:
+        args.extend(["--output", str(output_path)])
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 1
+    assert "Severity policy failed" in result.output
+    if write_to_file:
+        report_text = output_path.read_text(encoding="utf-8")
+    else:
+        report_text = result.stdout
+    report = json.loads(report_text)
+    if report_format == "json":
+        assert report["findings"][0]["finding_id"] == finding.finding_id
+    else:
+        assert report["runs"][0]["results"][0]["ruleId"] == finding.finding_id
+
+
+@pytest.mark.parametrize(
+    ("scan_name", "error", "expected_message"),
+    [
+        (
+            "dependency-audit",
+            ScannerExecutionError("pip-audit could not be started."),
+            "Dependency audit failed",
+        ),
+        ("secret-scan", ScannerUnavailableError("Gitleaks is unavailable."), "Secret scan failed"),
+        ("web-check", NetworkConsentError("Consent is required."), "Web assessment failed"),
+    ],
+)
+def test_scanner_errors_remain_distinct_from_threshold_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    scan_name: str,
+    error: Exception,
+    expected_message: str,
+) -> None:
+    _mock_scan_result(monkeypatch, scan_name, error)
+    scan = (
+        cli.audit_dependencies
+        if scan_name == "dependency-audit"
+        else cli.scan_secrets
+        if scan_name == "secret-scan"
+        else cli.check_web_configuration
+    )
+    scan.side_effect = error
+    scan.return_value = None
+
+    result = runner.invoke(
+        app,
+        [*_scan_args(scan_name), "--minimum-severity", "high"],
+    )
+
+    assert result.exit_code == 2
+    assert expected_message in result.output
+    assert "Severity policy failed" not in result.output
+
+
+def test_invalid_minimum_severity_is_rejected_before_scanning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scan = Mock()
+    monkeypatch.setattr(cli, "scan_secrets", scan)
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", ".", "--minimum-severity", "urgent"],
+    )
+
+    assert result.exit_code == 2
+    scan.assert_not_called()
+    assert "Invalid value" in result.output
 
 
 def test_secret_scan_success_reports_no_secrets(monkeypatch: pytest.MonkeyPatch) -> None:

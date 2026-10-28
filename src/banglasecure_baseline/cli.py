@@ -3,11 +3,17 @@
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
 from banglasecure_baseline.dependency_audit import DependencyAuditError, audit_dependencies
-from banglasecure_baseline.findings import Finding
+from banglasecure_baseline.findings import (
+    Finding,
+    InvalidFindingSeverityError,
+    Severity,
+    findings_fail_severity_gate,
+)
 from banglasecure_baseline.reporting import (
     ReportError,
     serialize_json_report,
@@ -58,6 +64,36 @@ def _emit_report(
     typer.echo(f"{report_format.upper()} report written to {report_path}.")
 
 
+def _evaluate_severity_gate(
+    findings: tuple[Finding, ...],
+    minimum_severity: Severity | None,
+    assessment_name: str,
+) -> bool:
+    try:
+        return findings_fail_severity_gate(findings, minimum_severity)
+    except InvalidFindingSeverityError:
+        typer.echo(
+            f"{assessment_name} failed: a finding has a missing or unsupported severity.",
+            err=True,
+        )
+        raise typer.Exit(code=2) from None
+
+
+def _finish_severity_gate(
+    gate_failed: bool,
+    minimum_severity: Severity | None,
+) -> None:
+    if not gate_failed:
+        return
+    if minimum_severity is not None:
+        typer.echo(
+            "Severity policy failed: one or more findings meet the minimum severity "
+            f"'{minimum_severity.value}' or are unassessed.",
+            err=True,
+        )
+    raise typer.Exit(code=1)
+
+
 @app.callback()
 def main() -> None:
     """Run non-invasive, authorised security baseline checks."""
@@ -88,6 +124,17 @@ def dependency_audit(
             "services; explicit consent is required."
         ),
     ),
+    minimum_severity: Annotated[
+        Severity | None,
+        typer.Option(
+            "--minimum-severity",
+            metavar="SEVERITY",
+            help=(
+                "Fail when a finding meets or exceeds this severity. Unassessed findings always "
+                "fail an explicitly configured threshold."
+            ),
+        ),
+    ] = None,
     report_format: str = typer.Option(
         "text",
         "--format",
@@ -111,14 +158,18 @@ def dependency_audit(
         typer.echo(f"Dependency audit failed: {error}", err=True)
         raise typer.Exit(code=2) from None
 
+    gate_failed = _evaluate_severity_gate(
+        findings,
+        minimum_severity,
+        "Dependency audit",
+    )
     if report_format in {"json", "sarif"}:
         try:
             _emit_report(findings, output_path, target, report_format)
         except ReportError as error:
             typer.echo(f"Dependency audit report failed: {error}", err=True)
             raise typer.Exit(code=2) from None
-        if findings:
-            raise typer.Exit(code=1)
+        _finish_severity_gate(gate_failed, minimum_severity)
         return
 
     if not findings:
@@ -132,7 +183,7 @@ def dependency_audit(
         typer.echo(f"  Evidence: {finding.safe_evidence}")
         if finding.references:
             typer.echo(f"  References: {', '.join(finding.references)}")
-    raise typer.Exit(code=1)
+    _finish_severity_gate(gate_failed, minimum_severity)
 
 
 @app.command("secret-scan")
@@ -148,6 +199,17 @@ def secret_scan(
         "--include-git-history",
         help="Also scan the target Git repository's commit history.",
     ),
+    minimum_severity: Annotated[
+        Severity | None,
+        typer.Option(
+            "--minimum-severity",
+            metavar="SEVERITY",
+            help=(
+                "Fail when a finding meets or exceeds this severity. Unassessed findings always "
+                "fail an explicitly configured threshold."
+            ),
+        ),
+    ] = None,
     report_format: str = typer.Option(
         "text",
         "--format",
@@ -171,14 +233,14 @@ def secret_scan(
         typer.echo(f"Secret scan failed: {error}", err=True)
         raise typer.Exit(code=2) from None
 
+    gate_failed = _evaluate_severity_gate(findings, minimum_severity, "Secret scan")
     if report_format in {"json", "sarif"}:
         try:
             _emit_report(findings, output_path, target, report_format)
         except ReportError as error:
             typer.echo(f"Secret scan report failed: {error}", err=True)
             raise typer.Exit(code=2) from None
-        if findings:
-            raise typer.Exit(code=1)
+        _finish_severity_gate(gate_failed, minimum_severity)
         return
 
     if not findings:
@@ -191,7 +253,7 @@ def secret_scan(
         typer.echo(f"  Severity: {finding.severity.value}")
         typer.echo(f"  Location: {finding.location}")
         typer.echo(f"  Evidence: {finding.safe_evidence}")
-    raise typer.Exit(code=1)
+    _finish_severity_gate(gate_failed, minimum_severity)
 
 
 @app.command("web-verification-token")
@@ -226,6 +288,17 @@ def web_check(
         "--allow-network",
         help="Consent to DNS and HTTPS requests to the verified target domain.",
     ),
+    minimum_severity: Annotated[
+        Severity | None,
+        typer.Option(
+            "--minimum-severity",
+            metavar="SEVERITY",
+            help=(
+                "Fail when a finding meets or exceeds this severity. Unassessed findings always "
+                "fail an explicitly configured threshold."
+            ),
+        ),
+    ] = None,
     report_format: str = typer.Option(
         "text",
         "--format",
@@ -253,14 +326,14 @@ def web_check(
         typer.echo(f"Web assessment failed: {error}", err=True)
         raise typer.Exit(code=2) from None
 
+    gate_failed = _evaluate_severity_gate(findings, minimum_severity, "Web assessment")
     if report_format in {"json", "sarif"}:
         try:
             _emit_report(findings, output_path, None, report_format)
         except ReportError as error:
             typer.echo(f"Web assessment report failed: {error}", err=True)
             raise typer.Exit(code=2) from None
-        if findings:
-            raise typer.Exit(code=1)
+        _finish_severity_gate(gate_failed, minimum_severity)
         return
 
     if not findings:
@@ -273,7 +346,7 @@ def web_check(
         typer.echo(f"  Severity: {finding.severity.value}")
         typer.echo(f"  Location: {finding.location}")
         typer.echo(f"  Evidence: {finding.safe_evidence}")
-    raise typer.Exit(code=1)
+    _finish_severity_gate(gate_failed, minimum_severity)
 
 
 if __name__ == "__main__":
