@@ -1,6 +1,7 @@
 """Tests for the command-line interface."""
 
 import json
+import re
 import secrets
 import string
 import subprocess
@@ -22,6 +23,17 @@ from banglasecure_baseline.web_check import (
 )
 
 runner = CliRunner()
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _normalized_cli_output(output: str) -> str:
+    return " ".join(_ANSI_ESCAPE.sub("", output).split())
+
+
+def test_cli_output_normalization_removes_ansi_and_collapses_wrapping() -> None:
+    output = "\x1b[1m--allow-advisory-network\x1b[0m Package names\n and versions"
+
+    assert _normalized_cli_output(output) == ("--allow-advisory-network Package names and versions")
 
 
 def _assert_secret_not_disclosed(value: str, secret: str) -> None:
@@ -50,11 +62,17 @@ def test_version_command_succeeds() -> None:
 
 
 def test_dependency_audit_help_explains_network_consent() -> None:
-    result = runner.invoke(app, ["dependency-audit", "--help"])
+    result = runner.invoke(
+        app,
+        ["dependency-audit", "--help"],
+        color=False,
+        terminal_width=120,
+    )
+    output = _normalized_cli_output(result.output)
 
     assert result.exit_code == 0
-    assert "--allow-advisory-network" in result.output
-    assert "Package names and versions" in result.output
+    assert "--allow-advisory-network" in output
+    assert "Package names and versions" in output
 
 
 def test_dependency_audit_requires_network_consent(tmp_path: Path) -> None:
@@ -216,11 +234,17 @@ def test_dependency_audit_json_scanner_failure_is_not_a_clean_report(
 
 
 def test_secret_scan_help_explains_history_option() -> None:
-    result = runner.invoke(app, ["secret-scan", "--help"])
+    result = runner.invoke(
+        app,
+        ["secret-scan", "--help"],
+        color=False,
+        terminal_width=120,
+    )
+    output = _normalized_cli_output(result.output)
 
     assert result.exit_code == 0
-    assert "--include-git-history" in result.output
-    assert "authorised" in result.output
+    assert "--include-git-history" in output
+    assert "authorised" in output
 
 
 def test_secret_scan_success_reports_no_secrets(monkeypatch: pytest.MonkeyPatch) -> None:

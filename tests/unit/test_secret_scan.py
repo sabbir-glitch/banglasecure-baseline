@@ -1,6 +1,7 @@
 """Tests for safe Gitleaks invocation, parsing, and cleanup."""
 
 import json
+import os
 import secrets
 import string
 import subprocess
@@ -352,6 +353,40 @@ def test_absolute_in_target_paths_are_normalized(
     findings = scan_secrets(target)
 
     assert findings[0].location == "app.py:4"
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="This test covers native POSIX absolute paths.",
+)
+def test_posix_absolute_in_target_paths_are_normalized(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+
+    assert secret_scan._relative_location(str(target / "app.py"), target) == "app.py"
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="A foreign Windows absolute path cannot be inside a POSIX target.",
+)
+def test_windows_absolute_path_is_rejected_for_posix_target(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+
+    with pytest.raises(InvalidScanReportError, match="out-of-scope"):
+        secret_scan._relative_location(r"C:\outside\app.py", target)
+
+
+def test_relative_windows_separators_are_normalized(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+
+    assert secret_scan._relative_location(r"nested\app.py", target) == "nested/app.py"
+
+
+def test_absolute_path_outside_target_is_rejected(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+
+    with pytest.raises(InvalidScanReportError, match="out-of-scope"):
+        secret_scan._relative_location(str(tmp_path / "outside.py"), target)
 
 
 def test_secret_and_match_sentinel_never_enter_findings(

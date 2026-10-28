@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -110,14 +111,19 @@ def _relative_location(value: object, target: Path) -> str:
 
     portable_value = value.replace("\\", "/")
     windows_path = PureWindowsPath(value)
-    if windows_path.is_absolute() or windows_path.drive:
+    posix_path = PurePosixPath(value)
+    if Path(value).is_absolute():
         try:
             absolute_path = Path(value).resolve(strict=False)
-            relative = absolute_path.relative_to(target).as_posix()
+            relative = absolute_path.relative_to(target.resolve(strict=True)).as_posix()
         except (OSError, RuntimeError, ValueError):
             raise InvalidScanReportError(
                 "Gitleaks returned an out-of-scope file location."
             ) from None
+    elif os.name == "nt" and posix_path.is_absolute():
+        raise InvalidScanReportError("Gitleaks returned an invalid file location.")
+    elif windows_path.is_absolute() or windows_path.drive or windows_path.root:
+        raise InvalidScanReportError("Gitleaks returned an out-of-scope file location.")
     else:
         relative = portable_value.removeprefix("./")
 
