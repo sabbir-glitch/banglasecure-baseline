@@ -76,7 +76,14 @@ jobs:
           "$cli" secret-scan --help
           "$cli" web-check --help
           for scan_command in dependency-audit secret-scan web-check; do
-            command_help="$("$cli" "$scan_command" --help)"
-            [[ "$command_help" == *"--minimum-severity"* ]]
+            if ! command_help="$("$cli" "$scan_command" --help 2>&1 | sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g')"; then
+              echo "Failed to read help for '$scan_command'." >&2
+              exit 1
+            fi
+            if [[ "$command_help" != *"--minimum-severity"* ]]; then
+              echo "Expected --minimum-severity in '$scan_command --help' output." >&2
+              printf '%s\n' "$command_help" >&2
+              exit 1
+            fi
           done
           "$cli" version
