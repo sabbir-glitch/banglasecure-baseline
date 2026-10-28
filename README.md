@@ -8,9 +8,9 @@ small organisations in Bangladesh.
 
 ## Project status
 
-Early development. Dependency auditing and local secret scanning are
-implemented; the other capabilities listed below are planned and are not
-currently available.
+Early development. Dependency auditing, local secret scanning, and authorised
+web configuration checks are implemented; the other capabilities listed below
+are planned and are not currently available.
 
 ## Implemented: dependency auditing
 
@@ -104,9 +104,60 @@ to assess. Gitleaks applies detector-specific matching and entropy thresholds;
 low-entropy placeholders or synthetic strings may not match a default rule.
 A clean result is not proof that no secrets are present.
 
+## Implemented: authorised web configuration checks
+
+Only assess public domains for which you have explicit legal authorisation.
+The DNS challenge below establishes control over a DNS record, but does not
+establish the legal scope or permission for an assessment.
+
+Generate a challenge locally:
+
+```powershell
+banglasecure web-verification-token example.org
+```
+
+This command makes no network request and does not change DNS. Publish the
+exact TXT record name and token value it prints:
+
+```text
+_banglasecure-verification.example.org TXT "<generated-token>"
+```
+
+After the record is visible in DNS, run the explicitly consented assessment:
+
+```powershell
+banglasecure web-check example.org --verification-token "<generated-token>" --allow-network
+```
+
+The assessment refuses to start without a valid hostname, a matching
+verification TXT record, and `--allow-network`. It checks A and AAAA
+resolution, validated HTTPS/TLS, selected security headers (HSTS, CSP,
+X-Content-Type-Options, Referrer-Policy, Permissions-Policy, and framing
+protection), and SPF/DMARC TXT records. It does not enumerate DKIM selectors,
+follow redirects, crawl pages, submit forms, authenticate, modify the site,
+or use a central scanning service.
+
+DNS lookups have bounded per-query timeouts and the assessment has a finite
+overall timeout. HTTPS connects to a previously resolved, globally routable
+IP address while retaining the domain for SNI, certificate hostname
+verification, and the HTTP Host header. Private, reserved, and other
+non-global addresses are rejected. Redirects are not followed. TLS
+certificate validation remains enabled. Response bodies and sensitive
+response headers are not retained or displayed; findings contain check
+metadata only. A certificate expiring within 30 days is reported as a
+configuration finding. DNS verification, record lookups, and HTTPS/TLS checks
+contact the target's DNS infrastructure or HTTPS endpoint.
+
+The checks are a limited configuration baseline, not a penetration test and
+not proof that a website is secure. Findings use unassessed severity unless a
+specific observation supports a more precise classification. A failed check
+is reported as an assessment failure rather than a clean result. Certificate
+metadata is reported only when normal TLS certificate validation succeeds;
+on validation failure, the scanner reports the failure without trusting or
+retrieving unverified certificate metadata.
+
 ## Planned capabilities
 
-- Non-invasive HTTPS, TLS, HTTP security-header, and selected DNS checks.
 - JSON and SARIF reports.
 - GitHub Actions integration.
 

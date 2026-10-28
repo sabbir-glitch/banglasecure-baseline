@@ -7,6 +7,11 @@ import typer
 
 from banglasecure_baseline.dependency_audit import DependencyAuditError, audit_dependencies
 from banglasecure_baseline.secret_scan import SecretScanError, scan_secrets
+from banglasecure_baseline.web_check import (
+    WebCheckError,
+    check_web_configuration,
+    generate_verification_token,
+)
 
 app = typer.Typer(
     help="Affordable security checks. Clear fixes. Safer systems.",
@@ -92,6 +97,63 @@ def secret_scan(
         return
 
     typer.echo(f"Secret scan found {len(findings)} potential finding(s):")
+    for finding in findings:
+        typer.echo(f"- {finding.title}")
+        typer.echo(f"  Severity: {finding.severity.value}")
+        typer.echo(f"  Location: {finding.location}")
+        typer.echo(f"  Evidence: {finding.safe_evidence}")
+    raise typer.Exit(code=1)
+
+
+@app.command("web-verification-token")
+def web_verification_token(
+    domain: str = typer.Argument(..., help="Public domain name to verify ownership of."),
+) -> None:
+    """Generate a local DNS TXT challenge; no DNS lookup or change is performed."""
+    try:
+        record_name, token = generate_verification_token(domain)
+    except WebCheckError as error:
+        typer.echo(f"Verification token generation failed: {error}", err=True)
+        raise typer.Exit(code=2) from None
+
+    typer.echo("Publish this DNS TXT record to prove control of the domain:")
+    typer.echo(f"Name: {record_name}")
+    typer.echo(f"Value: {token}")
+    typer.echo("This command generated a challenge; DNS verification has not occurred.")
+
+
+@app.command("web-check")
+def web_check(
+    domain: str = typer.Argument(..., help="Public domain you are authorised to assess."),
+    verification_token: str = typer.Option(
+        ...,
+        "--verification-token",
+        help="Token from the matching _banglasecure-verification DNS TXT record.",
+        prompt=False,
+        hide_input=True,
+    ),
+    allow_network: bool = typer.Option(
+        False,
+        "--allow-network",
+        help="Consent to DNS and HTTPS requests to the verified target domain.",
+    ),
+) -> None:
+    """Check selected DNS and HTTPS configuration for a verified public domain."""
+    try:
+        findings = check_web_configuration(
+            domain,
+            verification_token=verification_token,
+            allow_network=allow_network,
+        )
+    except WebCheckError as error:
+        typer.echo(f"Web assessment failed: {error}", err=True)
+        raise typer.Exit(code=2) from None
+
+    if not findings:
+        typer.echo("Web configuration checks completed without reportable findings.")
+        return
+
+    typer.echo(f"Web configuration checks reported {len(findings)} finding(s):")
     for finding in findings:
         typer.echo(f"- {finding.title}")
         typer.echo(f"  Severity: {finding.severity.value}")

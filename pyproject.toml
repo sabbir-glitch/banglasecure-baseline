@@ -30,6 +30,8 @@ classifiers = [
     "Topic :: Security"
 ]
 dependencies = [
+    "dnspython>=2.7,<3.0",
+    "idna>=3.7,<4.0",
     "requests>=2.32,<3.0",
     "typer>=0.12,<1.0"
 ]

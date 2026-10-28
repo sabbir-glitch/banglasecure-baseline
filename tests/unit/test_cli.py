@@ -6,6 +6,7 @@ import string
 import subprocess
 from pathlib import Path
 from typing import Never
+from unittest.mock import Mock
 
 import pytest
 from typer.testing import CliRunner
@@ -15,6 +16,10 @@ from banglasecure_baseline.cli import app
 from banglasecure_baseline.dependency_audit import ScannerExecutionError
 from banglasecure_baseline.findings import Finding, Severity
 from banglasecure_baseline.secret_scan import ScannerUnavailableError
+from banglasecure_baseline.web_check import (
+    NetworkConsentError,
+    VerificationError,
+)
 
 runner = CliRunner()
 
@@ -234,3 +239,111 @@ def test_secret_scan_cli_sanitizes_unexpected_scanner_output(
     assert result.exit_code == 2
     assert "Secret scan failed" in result.output
     _assert_secret_not_disclosed(result.output, sentinel)
+
+
+def test_web_verification_token_command_outputs_dns_record_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record_name = "_banglasecure-verification.example.org"
+    token = "z" * 43
+    generate = Mock(return_value=(record_name, token))
+    monkeypatch.setattr(cli, "generate_verification_token", generate)
+
+    result = runner.invoke(app, ["web-verification-token", "Example.org"])
+
+    assert result.exit_code == 0
+    assert record_name in result.output
+    assert token in result.output
+    assert "verification has not occurred" in result.output
+    generate.assert_called_once_with("Example.org")
+
+
+def test_web_check_requires_token_and_allow_network_options() -> None:
+    result = runner.invoke(app, ["web-check", "example.org"])
+
+    assert result.exit_code != 0
+
+
+def test_web_check_missing_network_consent_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = Mock(side_effect=NetworkConsentError("Explicit network consent is required."))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        ["web-check", "example.org", "--verification-token", "z" * 43],
+    )
+
+    assert result.exit_code == 2
+    check.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("findings", "expected_code", "message"),
+    [
+        ((), 0, "without reportable findings"),
+        (
+            (
+                Finding(
+                    finding_id="WEB-0123456789abcdef",
+                    title="SPF record is absent",
+                    severity=Severity.UNASSESSED,
+                    category="web-configuration",
+                    summary_en="No SPF record was found.",
+                    summary_bn="SPF রেকর্ড পাওয়া যায়নি।",
+                    safe_evidence="No SPF TXT record was found.",
+                    impact_en="Mail spoofing may be harder to identify.",
+                    impact_bn="জাল ইমেইল শনাক্ত করা কঠিন হতে পারে।",
+                    remediation_en="Publish an SPF policy.",
+                    remediation_bn="SPF নীতি প্রকাশ করুন।",
+                    location="dns://example.org/TXT",
+                ),
+            ),
+            1,
+            "finding(s)",
+        ),
+    ],
+)
+def test_web_check_exit_code_for_completed_assessment(
+    monkeypatch: pytest.MonkeyPatch,
+    findings: tuple[Finding, ...],
+    expected_code: int,
+    message: str,
+) -> None:
+    monkeypatch.setattr(cli, "check_web_configuration", lambda *args, **kwargs: findings)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--allow-network",
+        ],
+    )
+
+    assert result.exit_code == expected_code
+    assert message in result.output
+
+
+def test_web_check_verification_failure_returns_distinct_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = Mock(side_effect=VerificationError("The DNS verification token does not match."))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--allow-network",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Web assessment failed" in result.output
