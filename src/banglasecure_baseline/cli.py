@@ -11,8 +11,10 @@ from banglasecure_baseline.findings import Finding
 from banglasecure_baseline.reporting import (
     ReportError,
     serialize_json_report,
+    serialize_sarif_report,
     validate_report_destination,
     write_json_report,
+    write_sarif_report,
 )
 from banglasecure_baseline.secret_scan import SecretScanError, scan_secrets
 from banglasecure_baseline.web_check import (
@@ -32,25 +34,28 @@ def _prepare_report_output(
     output: str | None,
     protected_target: str | None,
 ) -> tuple[str, Path | None]:
-    if report_format not in {"text", "json"}:
-        raise ReportError("Report format must be either 'text' or 'json'.")
+    if report_format not in {"text", "json", "sarif"}:
+        raise ReportError("Report format must be 'text', 'json', or 'sarif'.")
     if output is None:
         return report_format, None
-    if report_format != "json":
-        raise ReportError("--output can be used only with --format json.")
+    if report_format == "text":
+        raise ReportError("--output can be used only with --format json or sarif.")
     return report_format, validate_report_destination(output, protected_target=protected_target)
 
 
-def _emit_json_report(
+def _emit_report(
     findings: tuple[Finding, ...],
     output: Path | None,
     protected_target: str | None,
+    report_format: str,
 ) -> None:
+    serializer = serialize_sarif_report if report_format == "sarif" else serialize_json_report
     if output is None:
-        typer.echo(serialize_json_report(findings), nl=False)
+        typer.echo(serializer(findings), nl=False)
         return
-    report_path = write_json_report(findings, output, protected_target=protected_target)
-    typer.echo(f"JSON report written to {report_path}.")
+    writer = write_sarif_report if report_format == "sarif" else write_json_report
+    report_path = writer(findings, output, protected_target=protected_target)
+    typer.echo(f"{report_format.upper()} report written to {report_path}.")
 
 
 @app.callback()
@@ -86,12 +91,12 @@ def dependency_audit(
     report_format: str = typer.Option(
         "text",
         "--format",
-        help="Output format: text (default) or json.",
+        help="Output format: text (default), json, or sarif.",
     ),
     output: str | None = typer.Option(
         None,
         "--output",
-        help="Write a JSON report to this local file; requires --format json.",
+        help="Write a JSON or SARIF report to this local file.",
     ),
 ) -> None:
     """Audit dependencies; this check does not prove that an application is secure."""
@@ -106,9 +111,9 @@ def dependency_audit(
         typer.echo(f"Dependency audit failed: {error}", err=True)
         raise typer.Exit(code=2) from None
 
-    if report_format == "json":
+    if report_format in {"json", "sarif"}:
         try:
-            _emit_json_report(findings, output_path, target)
+            _emit_report(findings, output_path, target, report_format)
         except ReportError as error:
             typer.echo(f"Dependency audit report failed: {error}", err=True)
             raise typer.Exit(code=2) from None
@@ -146,12 +151,12 @@ def secret_scan(
     report_format: str = typer.Option(
         "text",
         "--format",
-        help="Output format: text (default) or json.",
+        help="Output format: text (default), json, or sarif.",
     ),
     output: str | None = typer.Option(
         None,
         "--output",
-        help="Write a JSON report to this local file; requires --format json.",
+        help="Write a JSON or SARIF report to this local file.",
     ),
 ) -> None:
     """Scan local files for potential secrets without displaying secret values."""
@@ -166,9 +171,9 @@ def secret_scan(
         typer.echo(f"Secret scan failed: {error}", err=True)
         raise typer.Exit(code=2) from None
 
-    if report_format == "json":
+    if report_format in {"json", "sarif"}:
         try:
-            _emit_json_report(findings, output_path, target)
+            _emit_report(findings, output_path, target, report_format)
         except ReportError as error:
             typer.echo(f"Secret scan report failed: {error}", err=True)
             raise typer.Exit(code=2) from None
@@ -224,12 +229,12 @@ def web_check(
     report_format: str = typer.Option(
         "text",
         "--format",
-        help="Output format: text (default) or json.",
+        help="Output format: text (default), json, or sarif.",
     ),
     output: str | None = typer.Option(
         None,
         "--output",
-        help="Write a JSON report to this local file; requires --format json.",
+        help="Write a JSON or SARIF report to this local file.",
     ),
 ) -> None:
     """Check selected DNS and HTTPS configuration for a verified public domain."""
@@ -248,9 +253,9 @@ def web_check(
         typer.echo(f"Web assessment failed: {error}", err=True)
         raise typer.Exit(code=2) from None
 
-    if report_format == "json":
+    if report_format in {"json", "sarif"}:
         try:
-            _emit_json_report(findings, output_path, None)
+            _emit_report(findings, output_path, None, report_format)
         except ReportError as error:
             typer.echo(f"Web assessment report failed: {error}", err=True)
             raise typer.Exit(code=2) from None

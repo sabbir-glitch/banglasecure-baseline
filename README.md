@@ -168,18 +168,33 @@ banglasecure secret-scan .\path\to\project --format json
 banglasecure web-check example.org --verification-token "<token>" --allow-network --format json
 ```
 
-Use `--output PATH` with JSON format to atomically write a local report file.
+Use `--output PATH` with JSON or SARIF format to atomically write a local report file.
 The parent directory must already exist; the destination must be a regular
-file, network share, symbolic link, or a path through a symbolic link or
-Windows junction. Existing regular files at the destination are replaced
-atomically. BanglaSecure does not claim restrictive Windows file permissions;
-protect report files according to your operating-system policy.
+file and must not be a network share, symbolic link, or a path through a
+symbolic link or Windows junction. Existing regular files at the destination
+are replaced atomically. BanglaSecure does not claim restrictive Windows file
+permissions; protect report files according to your operating-system policy.
 
 ```powershell
 banglasecure dependency-audit . --allow-advisory-network --format json --output .\audit.json
 banglasecure secret-scan .\path\to\project --format json --output .\secrets.json
 banglasecure web-check example.org --verification-token "<token>" --allow-network --format json --output .\web.json
 ```
+
+Select `--format sarif` for a SARIF 2.1.0 report, written to stdout or to a
+local file using `--output`:
+
+```powershell
+banglasecure secret-scan .\path\to\project --format sarif
+banglasecure dependency-audit . --allow-advisory-network --format sarif --output .\audit.sarif
+banglasecure web-check example.org --verification-token "<token>" --allow-network --format sarif --output .\web.sarif
+```
+
+SARIF maps finding identifiers to rule identifiers, preserves bilingual
+remediation and references in result properties, and adds file locations only
+when the finding contains a safe relative file path. Web and DNS findings do
+not receive fabricated file locations. Severity maps conservatively to SARIF
+levels; the original severity remains in the properties.
 
 The JSON document uses schema version `1.0`, format identifier
 `banglasecure-json`, and the tool name `BanglaSecure Baseline`. Its top-level
@@ -203,10 +218,19 @@ commit them to public repositories without reviewing their contents. Report
 output must be outside an assessed scan directory and cannot overwrite the
 selected manifest. Reports are never created during normal text-mode scans.
 
+## Implemented: GitHub Actions quality workflow
+
+The `.github/workflows/ci.yml` workflow runs on pushes and pull requests using
+GitHub-hosted Linux runners and Python 3.12 and 3.13. It installs the project
+and development dependencies, then runs Ruff linting, Ruff formatting checks,
+pytest, mypy, and a package build. It uses read-only repository permissions,
+does not persist checkout credentials, and does not run remote security
+assessments, dependency advisory scans, or Gitleaks. The workflow does not
+upload SARIF or create GitHub Code Scanning alerts.
+
 ## Planned capabilities
 
-- SARIF reports.
-- GitHub Actions integration.
+- SARIF upload to GitHub Code Scanning.
 
 ## Security and privacy
 

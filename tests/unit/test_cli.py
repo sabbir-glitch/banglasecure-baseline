@@ -127,6 +127,25 @@ def test_dependency_audit_json_still_requires_network_consent(
     assert "Consent required" in result.output
 
 
+def test_dependency_audit_sarif_does_not_bypass_network_consent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    audit = Mock(side_effect=cli.DependencyAuditError("Consent required."))
+    monkeypatch.setattr(cli, "audit_dependencies", audit)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["dependency-audit", str(project), "--format", "sarif"],
+    )
+
+    assert result.exit_code == 2
+    audit.assert_called_once_with(str(project), allow_advisory_network=False)
+    assert not result.stdout.startswith("{")
+
+
 def test_dependency_audit_findings_return_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     finding = Finding(
         finding_id="DEP-0123456789abcdef",
@@ -272,6 +291,76 @@ def test_secret_scan_json_report_omits_raw_synthetic_secret(
     parsed = json.loads(result.stdout)
     assert parsed["findings"][0]["finding_id"] == finding.finding_id
     _assert_secret_not_disclosed(result.stdout, sentinel)
+
+
+def test_secret_scan_sarif_output_keeps_raw_secret_out_and_returns_finding_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sentinel = _synthetic_github_token()
+    finding = Finding(
+        finding_id="SECRET-synthetic",
+        title="Potential secret detected (synthetic-rule)",
+        severity=Severity.UNASSESSED,
+        category="secret",
+        summary_en="Potential secret detected; value withheld.",
+        summary_bn="সম্ভাব্য গোপন তথ্য শনাক্ত; মান প্রকাশ করা হয়নি।",
+        safe_evidence="Potential secret detected; value withheld.",
+        impact_en="A genuine credential may allow unauthorised access.",
+        impact_bn="প্রকৃত পরিচয়-তথ্য অননুমোদিত প্রবেশের সুযোগ দিতে পারে।",
+        remediation_en="Revoke or rotate any genuine exposed credential.",
+        remediation_bn="প্রকৃত উন্মুক্ত পরিচয়-তথ্য বাতিল বা পরিবর্তন করুন।",
+        location="app.py:3",
+    )
+    monkeypatch.setattr(cli, "scan_secrets", lambda *args, **kwargs: (finding,))
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", str(project), "--format", "sarif"],
+    )
+
+    assert result.exit_code == 1
+    sarif = json.loads(result.stdout)
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"][0]["ruleId"] == finding.finding_id
+    _assert_secret_not_disclosed(result.stdout, sentinel)
+
+
+def test_sarif_output_file_is_separate_from_completion_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "scan_secrets", lambda *args, **kwargs: ())
+    project = tmp_path / "project"
+    project.mkdir()
+    output = tmp_path / "report.sarif"
+
+    result = runner.invoke(
+        app,
+        ["secret-scan", str(project), "--format", "sarif", "--output", str(output)],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("SARIF report written to")
+    assert json.loads(output.read_text(encoding="utf-8"))["runs"][0]["results"] == []
+
+
+def test_sarif_stdout_contains_only_the_empty_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "scan_secrets", lambda *args, **kwargs: ())
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(app, ["secret-scan", str(project), "--format", "sarif"])
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["version"] == "2.1.0"
+    assert document["runs"][0]["results"] == []
 
 
 def test_secret_scan_json_file_output_is_separate_from_completion_message(
@@ -529,6 +618,45 @@ def test_web_check_json_report_uses_mocked_verified_scan_and_preserves_finding_e
     )
 
 
+def test_web_check_sarif_report_uses_completed_assessment_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finding = Finding(
+        finding_id="WEB-0123456789abcdef",
+        title="SPF record is absent",
+        severity=Severity.UNASSESSED,
+        category="web-configuration",
+        summary_en="No SPF record was found.",
+        summary_bn="SPF রেকর্ড পাওয়া যায়নি।",
+        safe_evidence="No SPF TXT record was found.",
+        impact_en="Mail spoofing may be harder to identify.",
+        impact_bn="জাল ইমেইল শনাক্ত করা কঠিন হতে পারে।",
+        remediation_en="Publish an SPF policy.",
+        remediation_bn="SPF নীতি প্রকাশ করুন।",
+        location="dns://example.org/TXT",
+    )
+    check = Mock(return_value=(finding,))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--allow-network",
+            "--format",
+            "sarif",
+        ],
+    )
+
+    assert result.exit_code == 1
+    result_entry = json.loads(result.stdout)["runs"][0]["results"][0]
+    assert result_entry["ruleId"] == finding.finding_id
+    assert "locations" not in result_entry
+
+
 def test_web_check_json_does_not_bypass_network_consent_or_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -552,6 +680,61 @@ def test_web_check_json_does_not_bypass_network_consent_or_verification(
         "example.org",
         verification_token="z" * 43,
         allow_network=False,
+    )
+    assert not result.stdout.startswith("{")
+
+
+def test_web_check_sarif_does_not_bypass_verification_or_network_consent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = Mock(side_effect=VerificationError("The DNS verification token does not match."))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--format",
+            "sarif",
+        ],
+    )
+
+    assert result.exit_code == 2
+    check.assert_called_once_with(
+        "example.org",
+        verification_token="z" * 43,
+        allow_network=False,
+    )
+    assert not result.stdout.startswith("{")
+
+
+def test_web_check_sarif_with_consent_still_requires_matching_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = Mock(side_effect=VerificationError("The DNS verification token does not match."))
+    monkeypatch.setattr(cli, "check_web_configuration", check)
+
+    result = runner.invoke(
+        app,
+        [
+            "web-check",
+            "example.org",
+            "--verification-token",
+            "z" * 43,
+            "--allow-network",
+            "--format",
+            "sarif",
+        ],
+    )
+
+    assert result.exit_code == 2
+    check.assert_called_once_with(
+        "example.org",
+        verification_token="z" * 43,
+        allow_network=True,
     )
     assert not result.stdout.startswith("{")
 
