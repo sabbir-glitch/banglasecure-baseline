@@ -190,6 +190,13 @@ def test_mapped_windows_network_drive_is_rejected_without_accessing_the_path(
     drive_type.assert_called_once_with("R:\\")
 
 
+def test_missing_windows_api_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(reporting.ctypes, "windll", raising=False)
+
+    with pytest.raises(ReportError, match="drive could not be verified"):
+        reporting._windows_drive_type("R:\\")
+
+
 @pytest.mark.parametrize("drive_type", [2, 3, 5, 6])
 def test_local_windows_drive_types_are_not_classified_as_network_drives(
     monkeypatch: pytest.MonkeyPatch,

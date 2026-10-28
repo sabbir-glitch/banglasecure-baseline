@@ -33,7 +33,15 @@ def _is_windows() -> bool:
 
 def _windows_drive_type(drive_root: str) -> int:
     try:
-        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        windows_loader = vars(ctypes).get("windll")
+        if windows_loader is None:
+            raise AttributeError
+        kernel32 = getattr(windows_loader, "kernel32", None)
+        if kernel32 is None:
+            raise AttributeError
+        get_drive_type = getattr(kernel32, "GetDriveTypeW", None)
+        if get_drive_type is None:
+            raise AttributeError
         get_drive_type.argtypes = [ctypes.c_wchar_p]
         get_drive_type.restype = ctypes.c_uint
         return int(get_drive_type(drive_root))
